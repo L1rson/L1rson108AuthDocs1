@@ -1,0 +1,1131 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Practical documentation for hardware backed security, Android TEE and StrongBox, Android key attestation, and Meta Quest attestation.">
+  <title>Hardware and Attestation Docs</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="site-shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <a href="#overview">Hardware and Attestation</a>
+        <p>Practical security documentation</p>
+      </div>
+
+      <label class="search-label" for="doc-search">Search documentation</label>
+      <input id="doc-search" class="search" type="search" placeholder="Search terms" autocomplete="off">
+
+      <nav class="nav" aria-label="Documentation navigation">
+        <a href="#overview">Overview</a>
+        <a href="#trust-model">Trust model</a>
+        <a href="#security-layers">Security layers</a>
+        <a href="#tee">Trusted Execution Environment</a>
+        <a href="#tee-internals">How TEE works</a>
+        <a href="#strongbox">StrongBox</a>
+        <a href="#strongbox-details">StrongBox details</a>
+        <a href="#keystore">Android Keystore</a>
+        <a href="#key-lifecycle">Key lifecycle</a>
+        <a href="#key-attestation">Android key attestation</a>
+        <a href="#android-verification">Android verification</a>
+        <a href="#certificate-chain">Certificate chain</a>
+        <a href="#attestation-fields">Important attestation fields</a>
+        <a href="#verified-boot">Verified Boot</a>
+        <a href="#nonce">Nonces and replay protection</a>
+        <a href="#meta-attestation">Meta Quest attestation</a>
+        <a href="#meta-deep-dive">Meta attestation details</a>
+        <a href="#meta-claims">Meta token claims</a>
+        <a href="#meta-device-ban">Meta device bans</a>
+        <a href="#meta-user-verification">Meta user verification</a>
+        <a href="#combined-signals">Combining security signals</a>
+        <a href="#server-validation">Server validation</a>
+        <a href="#policy">Example policy</a>
+        <a href="#limits">What attestation cannot prove</a>
+        <a href="#mistakes">Common mistakes</a>
+        <a href="#testing">Testing</a>
+        <a href="#validation-tips">Validation tips</a>
+        <a href="#references">Official references</a>
+      </nav>
+    </aside>
+
+    <main class="main">
+      <div class="mobile-topbar">
+        <button id="menu-button" class="menu-button" type="button">Menu</button>
+        <span>Hardware and Attestation</span>
+      </div>
+
+      <article class="content" id="content">
+        <section id="overview" class="doc-section hero searchable">
+          <p class="eyebrow">Security documentation</p>
+          <h1>Hardware backed security and attestation</h1>
+          <p class="lead">Attestation is a way for a server to ask for evidence about the app, the device, or a cryptographic key before trusting a request. The important part is that the decision is made by a trusted server, not by the same client that might be modified.</p>
+          <div class="summary-grid">
+            <div class="summary-card">
+              <h2>TEE</h2>
+              <p>A Trusted Execution Environment is an isolated execution area protected from normal Android. It can keep cryptographic keys and security services away from ordinary app processes.</p>
+            </div>
+            <div class="summary-card">
+              <h2>StrongBox</h2>
+              <p>StrongBox is a stronger Android hardware security option backed by a dedicated secure element or integrated secure enclave when the device supports it.</p>
+            </div>
+            <div class="summary-card">
+              <h2>Android key attestation</h2>
+              <p>Android can return an X.509 certificate chain describing a generated key and security properties reported by KeyMint.</p>
+            </div>
+            <div class="summary-card">
+              <h2>Meta Quest attestation</h2>
+              <p>Meta can issue a signed integrity token that your server verifies with Meta to evaluate the Quest app and device state.</p>
+            </div>
+          </div>
+          <div class="callout">
+            <strong>Simple rule</strong>
+            <p>Client code collects evidence. The server verifies evidence. The server decides what access the client gets.</p>
+          </div>
+        </section>
+
+        <section id="trust-model" class="doc-section searchable">
+          <h2>Trust model</h2>
+          <p>A useful security design starts by deciding what you trust. Normal application code should usually be treated as untrusted because it runs on a device controlled by the user. A modified app can patch checks, fake return values, remove code, change network requests, or call your backend directly.</p>
+          <p>Hardware backed security moves some operations into an isolated security boundary. Remote attestation goes one step further by giving your server signed evidence that it can verify independently.</p>
+          <div class="three-column">
+            <div>
+              <h3>Client</h3>
+              <p>Requests a challenge, asks the platform for evidence, and sends the result to your server.</p>
+            </div>
+            <div>
+              <h3>Platform security</h3>
+              <p>Protects keys or generates signed integrity information using hardware or a trusted platform service.</p>
+            </div>
+            <div>
+              <h3>Server</h3>
+              <p>Checks signatures, freshness, identity, expected app values, replay state, and policy before granting access.</p>
+            </div>
+          </div>
+          <h3>What should never be trusted by itself</h3>
+          <p>A package name sent as normal JSON is only a string. A device model sent by the client is only a string. A SHA256 value calculated by the client is only a string. A boolean such as rooted equals false is only a client claim. Those values become useful only when they are tied to evidence your server can authenticate.</p>
+        </section>
+
+
+        <section id="security-layers" class="doc-section searchable">
+          <h2>Security layers</h2>
+          <p>TEE, StrongBox, Android key attestation, Meta attestation, user verification, entitlement, and your backend all solve different problems. The easiest way to understand them is to ask what each layer can actually prove.</p>
+          <table>
+            <thead>
+              <tr>
+                <th>Layer</th>
+                <th>Main job</th>
+                <th>What it does not prove by itself</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>TEE</td>
+                <td>Protects sensitive code and cryptographic key operations away from normal Android.</td>
+                <td>It does not prove your APK came from the Meta Horizon Store.</td>
+              </tr>
+              <tr>
+                <td>StrongBox</td>
+                <td>Protects supported keys inside more isolated dedicated secure hardware.</td>
+                <td>It does not automatically prove the rest of the app is unmodified.</td>
+              </tr>
+              <tr>
+                <td>Android key attestation</td>
+                <td>Lets a remote server verify properties of a generated key and selected device security state.</td>
+                <td>It is not a full replacement for Meta application integrity on Quest.</td>
+              </tr>
+              <tr>
+                <td>Meta application attestation</td>
+                <td>Lets your backend evaluate app recognition, signing information, device integrity, freshness, and other Meta supplied claims.</td>
+                <td>It does not prove the player is allowed to perform every backend action.</td>
+              </tr>
+              <tr>
+                <td>Meta user verification</td>
+                <td>Helps your backend confirm the Meta user proof for the user identifier being presented.</td>
+                <td>It does not prove device integrity or application integrity.</td>
+              </tr>
+              <tr>
+                <td>Entitlement</td>
+                <td>Answers whether the account has access to the application.</td>
+                <td>It does not prove the APK or device is clean.</td>
+              </tr>
+              <tr>
+                <td>Your backend session</td>
+                <td>Turns trusted verification results into access to your own services.</td>
+                <td>It is only as strong as the checks used when the session was created.</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="callout">
+            <strong>Easy way to think about it</strong>
+            <p>Hardware protects keys. Attestation reports evidence. Meta verifies Meta platform signals. Your server decides what the player is allowed to do.</p>
+          </div>
+        </section>
+
+        <section id="tee" class="doc-section searchable">
+          <h2>Trusted Execution Environment</h2>
+          <p>A Trusted Execution Environment is an isolated environment that runs alongside the normal operating system. Android documents Trusty as one TEE implementation. Trusty runs on the same main processor as Android but is isolated through hardware and software. Android supports other TEE implementations too.</p>
+          <p>The normal Android side is often called the rich execution environment or normal world. The protected TEE side is often called the secure world. The exact implementation depends on the device platform.</p>
+          <h3>Why it matters</h3>
+          <p>If a private key is created and kept inside secure hardware, normal app code does not receive the raw private key bytes. The app asks Android Keystore to perform an operation such as signing. This makes key extraction harder even if normal Android storage or an app process is compromised.</p>
+          <h3>TEE does not mean invincible</h3>
+          <p>A TEE reduces the amount of software that must be trusted, but it is still part of a real hardware and software system. Vulnerabilities, implementation bugs, outdated firmware, or compromised trusted components can still matter. That is one reason remote attestation includes version, boot, and security level information rather than treating the word TEE as enough.</p>
+          <h3>KeyMint and the TEE</h3>
+          <p>KeyMint is the Android security component that implements key creation and protected cryptographic operations. On a TEE backed device, sensitive KeyMint work runs inside the trusted environment. Android Keystore is the application facing system that routes key requests to the correct KeyMint implementation.</p>
+          <h3>Hardware enforced fields matter more</h3>
+          <p>Android attestation separates some rules into softwareEnforced and hardwareEnforced. A rule in hardwareEnforced is backed by the secure hardware boundary. A rule in softwareEnforced depends more heavily on normal Android remaining trustworthy.</p>
+          <div class="callout">
+            <strong>Tip</strong>
+            <p>When your goal is remote trust, do not stop at checking whether a local API says a key is hardware backed. Verify attestation remotely.</p>
+          </div>
+        </section>
+
+
+        <section id="tee-internals" class="doc-section searchable">
+          <h2>How a TEE works</h2>
+          <p>A TEE is not a second normal Android installation. It is a smaller protected environment that receives only specific security work. Android can ask it to create a key, use a key, confirm security state, or enforce restrictions without exposing the private key to ordinary application memory.</p>
+          <h3>Normal world and secure world</h3>
+          <div class="three-column">
+            <div>
+              <h3>Normal world</h3>
+              <p>Your game, Android framework code, most services, and the Linux kernel run here. This side has much more code and therefore a much larger attack surface.</p>
+            </div>
+            <div>
+              <h3>Secure world</h3>
+              <p>The TEE runs a smaller trusted operating environment and selected trusted services. Access is controlled through narrow interfaces instead of normal process memory.</p>
+            </div>
+            <div>
+              <h3>Hardware boundary</h3>
+              <p>The processor and platform security features keep the secure environment isolated from normal software. The exact implementation depends on the device.</p>
+            </div>
+          </div>
+          <h3>What happens when a protected key signs data</h3>
+          <div class="flow">
+            <div><span>1</span><p>Your app asks Android Keystore to use a key.</p></div>
+            <div><span>2</span><p>Android checks whether the request matches the key rules.</p></div>
+            <div><span>3</span><p>The cryptographic operation is passed to KeyMint in secure hardware when the key is hardware protected.</p></div>
+            <div><span>4</span><p>The secure environment performs the operation without returning the private key material.</p></div>
+            <div><span>5</span><p>Your app receives only the result such as a signature.</p></div>
+          </div>
+          <h3>Why this helps</h3>
+          <p>If normal Android is compromised, an attacker may still try to ask the secure hardware to use a key. The important difference is that extracting the private key itself is much harder. Key restrictions can also limit what operations the secure hardware allows.</p>
+          <h3>What TEE attestation means</h3>
+          <p>When Android attestation reports TrustedEnvironment for the relevant security level, the attestation is saying the protected operation is backed by a trusted execution environment rather than ordinary software. Your server should still validate the certificate chain, challenge, boot state, application identity, and every other field required by your policy.</p>
+          <h3>TEE is not the same as root detection</h3>
+          <p>A local root detector looks for signs inside Android. TEE backed attestation gives your server evidence from a more trusted boundary. Local root checks can still add telemetry, but they should not replace remote attestation.</p>
+        </section>
+
+        <section id="strongbox" class="doc-section searchable">
+          <h2>StrongBox</h2>
+          <p>StrongBox is Android terminology for KeyMint running in dedicated secure hardware such as an embedded secure element or integrated secure enclave. Android describes StrongBox as providing stronger isolation and tamper resistance than a normal TEE implementation.</p>
+          <p>StrongBox hardware has its own processing and secure storage capabilities. Android also requires security properties such as a true random number generator and secure timing support. Because it is more isolated and resource constrained, it can be slower and support fewer algorithms or concurrent operations.</p>
+          <h3>TEE compared with StrongBox</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Area</th>
+                <th>TEE</th>
+                <th>StrongBox</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Isolation</td>
+                <td>Protected execution environment on the main processor</td>
+                <td>Dedicated secure hardware or secure enclave</td>
+              </tr>
+              <tr>
+                <td>Android attestation level</td>
+                <td>TrustedEnvironment</td>
+                <td>StrongBox</td>
+              </tr>
+              <tr>
+                <td>Performance</td>
+                <td>Usually faster and more flexible</td>
+                <td>Usually slower and more constrained</td>
+              </tr>
+              <tr>
+                <td>Use case</td>
+                <td>Strong default for hardware backed keys</td>
+                <td>Higher assurance when the hardware supports it and the threat model needs it</td>
+              </tr>
+            </tbody>
+          </table>
+          <p>Do not assume every Android device or every Quest model exposes StrongBox to your application. Detect support and design a policy that has a clear fallback instead of silently pretending StrongBox was used.</p>
+          <p>Android exposes StrongBox beginning with Android 9 APIs. Apps can request StrongBox backing when generating supported keys, but the request can fail if the secure hardware is unavailable or does not support the requested key parameters.</p>
+        </section>
+
+
+        <section id="strongbox-details" class="doc-section searchable">
+          <h2>StrongBox details</h2>
+          <p>StrongBox is intended for cases where TEE isolation is not enough for the threat model. Android requires StrongBox implementations to use dedicated secure hardware with its own processing, protected storage, secure timing, and strong random number generation.</p>
+          <h3>Why StrongBox is harder to attack</h3>
+          <div class="detail-list">
+            <div>
+              <strong>Separate processing</strong>
+              <p>StrongBox uses dedicated secure processing instead of relying only on the main application processor.</p>
+            </div>
+            <div>
+              <strong>Protected storage</strong>
+              <p>Key material and secure state are kept in storage designed to preserve confidentiality, integrity, authenticity, and freshness.</p>
+            </div>
+            <div>
+              <strong>True random number generation</strong>
+              <p>StrongBox hardware includes its own source of unpredictable random values for cryptographic work.</p>
+            </div>
+            <div>
+              <strong>Secure timing</strong>
+              <p>A secure timer helps enforce rules without trusting the normal Android clock.</p>
+            </div>
+            <div>
+              <strong>Physical attack resistance</strong>
+              <p>The Android compatibility requirements include resistance to physical tampering, glitch attacks, and side channel leakage.</p>
+            </div>
+          </div>
+          <h3>StrongBox support is not guaranteed</h3>
+          <p>Android exposes FEATURE_STRONGBOX_KEYSTORE so an app can check whether the device advertises StrongBox support. A key request can still fail if the requested algorithm or key size is not supported by the StrongBox implementation.</p>
+          <h3>What to do if StrongBox is unavailable</h3>
+          <p>Decide your fallback before shipping. A normal consumer login might accept a TEE backed key. A very sensitive operation might refuse to continue without StrongBox. The important part is to make the decision explicit instead of silently claiming StrongBox protection when the key actually fell back to something else.</p>
+          <h3>StrongBox is slower for a reason</h3>
+          <p>StrongBox has fewer resources and supports fewer concurrent operations than the main processor. It is best used for security critical key operations, not for every high frequency game operation.</p>
+          <div class="callout warning">
+            <strong>Common misunderstanding</strong>
+            <p>StrongBox protects supported cryptographic keys and operations. It does not turn a modified APK into a trusted APK and it does not replace server validation.</p>
+          </div>
+        </section>
+
+        <section id="keystore" class="doc-section searchable">
+          <h2>Android Keystore</h2>
+          <p>Android Keystore lets an application create and use cryptographic keys without handling the raw secret key material directly. Depending on the device, keys can be software backed, TEE backed, or StrongBox backed.</p>
+          <h3>Security level</h3>
+          <p>For newer Android targets, KeyInfo.getSecurityLevel can report whether a key is in software, a trusted environment, or StrongBox. This local value can help your app understand where a key lives, but a remote server should use attestation when it needs to trust that answer.</p>
+          <h3>Key restrictions</h3>
+          <p>Keys can be created with restrictions such as allowed algorithms, allowed purposes, digests, padding modes, and user authentication requirements. Hardware backed implementations can enforce some of these restrictions outside normal Android.</p>
+          <h3>Important distinction</h3>
+          <p>Hardware backed key storage protects a cryptographic key. It does not automatically prove that every line of your APK is untampered. Android key attestation and Meta application attestation answer related but different questions.</p>
+          <h3>A hardware key is usually nonexportable</h3>
+          <p>When secure hardware protection is active, the private key material is not handed to your application as raw bytes. The app receives a key handle and asks Keystore to perform allowed operations.</p>
+          <h3>Key rules cannot simply be changed later</h3>
+          <p>Android binds key authorizations when the key is created or imported. If you need different key purposes, algorithms, authentication rules, or security requirements, create a new key instead of assuming the old key can be upgraded in place.</p>
+        </section>
+
+
+        <section id="key-lifecycle" class="doc-section searchable">
+          <h2>Key lifecycle</h2>
+          <p>A secure key design is more than generating a key once. You need to know where it was created, what it is allowed to do, how the server learns its public key, how long it stays trusted, and what happens when the app is reinstalled or the security state changes.</p>
+          <h3>Creation</h3>
+          <p>Create the key through Android Keystore with the exact purpose you need. If the key only signs challenges, do not give it unrelated permissions. If you need StrongBox, request it and confirm through attestation that the resulting security level matches the policy.</p>
+          <h3>Attestation</h3>
+          <p>Use a fresh server challenge when the key is first registered. Send the certificate chain to the backend and validate it before associating the public key with an account or device record.</p>
+          <h3>Registration</h3>
+          <p>After the chain passes, store the public key or a stable fingerprint of it on the server together with the account, creation time, security level, and the policy result. Do not store the private key because the whole point is that it remains on the device.</p>
+          <h3>Proof of possession</h3>
+          <p>Later, your backend can send a fresh challenge and require the device to sign it with the registered private key. The server verifies the signature with the stored public key. This proves the requester currently has access to that private key without exposing it.</p>
+          <h3>Rotation</h3>
+          <p>Plan how to replace a key after reinstall, reset, corruption, or a policy change. A new key should go through attestation again instead of inheriting trust from an old key automatically.</p>
+          <h3>Revocation</h3>
+          <p>Your backend should be able to disable a registered key if an account is recovered, suspicious activity is confirmed, or you intentionally invalidate old registrations.</p>
+          <div class="callout">
+            <strong>Useful pattern</strong>
+            <p>Attest once to register a hardware protected key, then use fresh signed server challenges for normal proof of possession. Reattest when your policy says the original device evidence is too old.</p>
+          </div>
+        </section>
+
+        <section id="key-attestation" class="doc-section searchable">
+          <h2>Android key attestation</h2>
+          <p>Android key attestation lets a remote verifier examine an X.509 certificate chain associated with a key created in Android Keystore. The attestation extension describes the key and selected device security properties at the time the key was created.</p>
+          <h3>Basic flow</h3>
+          <div class="flow">
+            <div><span>1</span><p>Your server creates a fresh challenge.</p></div>
+            <div><span>2</span><p>The app generates an Android Keystore key with that challenge as the attestation challenge.</p></div>
+            <div><span>3</span><p>The app retrieves the certificate chain for the key.</p></div>
+            <div><span>4</span><p>The app sends the certificate chain to your server.</p></div>
+            <div><span>5</span><p>Your server verifies the chain, root, revocation status, attestation challenge, security level, application identity, boot state, and the fields required by your policy.</p></div>
+          </div>
+          <h3>Why the challenge matters</h3>
+          <p>The challenge binds the attestation to a request your server created. If you accept an old certificate chain with an unrelated or reused challenge, an attacker may replay evidence that was valid earlier.</p>
+          <h3>Server side verification is required</h3>
+          <p>Android explicitly recommends sending the attestation certificate chain to a separate trusted server. Verifying the chain only on the same potentially compromised device defeats the point of remote verification.</p>
+          <h3>What the attestation is really binding together</h3>
+          <p>A successful result can bind a public key, a server challenge, security level, key authorizations, application identity information, and boot state into signed evidence. Your server should only trust the pieces that are actually present and validated in the attestation record.</p>
+        </section>
+
+
+        <section id="android-verification" class="doc-section searchable">
+          <h2>Android attestation verification</h2>
+          <p>The safest way to verify Android key attestation is to treat the certificate chain and the attestation record as separate jobs. First prove the chain is trusted. Then interpret the attestation fields. A parser that can read the fields is not automatically a secure verifier.</p>
+          <h3>Recommended verification order</h3>
+          <div class="flow">
+            <div><span>1</span><p>Receive the complete X.509 certificate chain from the device.</p></div>
+            <div><span>2</span><p>Build and validate the certificate path to a currently trusted Android attestation root.</p></div>
+            <div><span>3</span><p>Verify every certificate signature in the path.</p></div>
+            <div><span>4</span><p>Check every applicable certificate against the official Android attestation revocation status list.</p></div>
+            <div><span>5</span><p>Locate the first trusted key attestation extension according to Android guidance.</p></div>
+            <div><span>6</span><p>Decode the attestation record and compare the challenge with the server challenge.</p></div>
+            <div><span>7</span><p>Check attestation security level and KeyMint security level.</p></div>
+            <div><span>8</span><p>Check root of trust, lock state, Verified Boot state, application identity, patch information, and key authorizations required by your policy.</p></div>
+            <div><span>9</span><p>Consume the challenge so the same attestation cannot be accepted again for another registration.</p></div>
+          </div>
+          <h3>Do not assume the leaf certificate contains the trusted extension</h3>
+          <p>Android warns that an attacker can extend a certificate chain and add an untrusted attestation extension. Your verifier should follow the documented chain rules and trust only the first valid occurrence in the trusted part of the chain.</p>
+          <h3>Revocation matters</h3>
+          <p>Google maintains an official attestation certificate status list. Certificates can be revoked or suspended after key leakage, CA problems, software flaws, or other security events. Cache the list according to its HTTP cache instructions instead of downloading it for every request.</p>
+          <h3>Root changes matter</h3>
+          <p>Do not pin one old root forever. Android currently documents multiple valid attestation roots, including the newer root that started signing chains on February 1, 2026.</p>
+          <h3>Remote Key Provisioning</h3>
+          <p>Modern Android also uses Remote Key Provisioning for attestation keys. Android states that devices launching with Android 16 support only Remote Key Provisioning for this purpose. This changes how attestation keys are provisioned and allows more targeted revocation than older factory provisioned keys.</p>
+          <h3>Use a tested verifier</h3>
+          <p>Android currently recommends its attestation verification Kotlin library because certificate path and attestation edge cases are easy to miss in custom validation code. If you write your own verifier, test it against malformed chains and unusual valid chains instead of testing only the happy path.</p>
+        </section>
+
+        <section id="certificate-chain" class="doc-section searchable">
+          <h2>Certificate chain</h2>
+          <p>The attestation result is a certificate chain. The attested key certificate appears near the start of the chain and a trusted root appears at the end. Each certificate must be validated as part of the chain.</p>
+          <h3>Checks that matter</h3>
+          <div class="detail-list">
+            <div>
+              <strong>Chain signatures</strong>
+              <p>Verify that each certificate is correctly signed by the next trusted certificate in the chain.</p>
+            </div>
+            <div>
+              <strong>Trusted root</strong>
+              <p>Use the official Android attestation roots required by your policy. Google added a new attestation root that began signing chains on February 1, 2026, so do not hardcode only an older root.</p>
+            </div>
+            <div>
+              <strong>Revocation</strong>
+              <p>Check Android attestation certificate revocation information. A valid signature is not enough if a key has been revoked.</p>
+            </div>
+            <div>
+              <strong>Correct extension</strong>
+              <p>The Android key attestation extension uses object identifier 1.3.6.1.4.1.11129.2.1.17.</p>
+            </div>
+            <div>
+              <strong>First trusted occurrence</strong>
+              <p>Android warns not to blindly assume the attestation extension is always in the leaf certificate. Find the first occurrence according to the documented chain rules and do not trust attacker added extensions later in a manipulated chain.</p>
+            </div>
+          </div>
+          <div class="callout warning">
+            <strong>Important</strong>
+            <p>A certificate that parses successfully is not the same as a certificate that is trusted. Parsing, chain validation, root trust, revocation checks, and policy checks are separate steps.</p>
+          </div>
+        </section>
+
+        <section id="attestation-fields" class="doc-section searchable">
+          <h2>Important Android attestation fields</h2>
+          <p>The exact schema depends on the attestation and KeyMint version. These are some of the fields most useful for understanding device and key state.</p>
+          <table>
+            <thead>
+              <tr>
+                <th>Field</th>
+                <th>What it tells you</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>attestationSecurityLevel</td>
+                <td>Where the attestation operation is protected. Values include Software, TrustedEnvironment, and StrongBox.</td>
+              </tr>
+              <tr>
+                <td>keyMintSecurityLevel</td>
+                <td>The security level of the KeyMint implementation protecting key operations.</td>
+              </tr>
+              <tr>
+                <td>attestationChallenge</td>
+                <td>The challenge supplied when the key was attested. Your server should compare it to the challenge it issued.</td>
+              </tr>
+              <tr>
+                <td>rootOfTrust</td>
+                <td>Contains Verified Boot information including boot key, lock state, boot state, and on newer versions the verified boot hash.</td>
+              </tr>
+              <tr>
+                <td>osVersion</td>
+                <td>The Android OS version value reported through KeyMint.</td>
+              </tr>
+              <tr>
+                <td>osPatchLevel</td>
+                <td>The system security patch level.</td>
+              </tr>
+              <tr>
+                <td>vendorPatchLevel</td>
+                <td>The vendor image security patch level on supported attestation versions.</td>
+              </tr>
+              <tr>
+                <td>bootPatchLevel</td>
+                <td>The boot or kernel image security patch level on supported attestation versions.</td>
+              </tr>
+              <tr>
+                <td>attestationApplicationId</td>
+                <td>The Android platform view of the applications allowed to use the attested key. It can contain package and signing certificate information.</td>
+              </tr>
+              <tr>
+                <td>softwareEnforced</td>
+                <td>Authorization values enforced by the Android platform rather than directly by secure hardware.</td>
+              </tr>
+              <tr>
+                <td>hardwareEnforced</td>
+                <td>Authorization values enforced by the TEE or StrongBox implementation.</td>
+              </tr>
+              <tr>
+                <td>purpose</td>
+                <td>The operations the attested key is authorized to perform, such as signing or decryption.</td>
+              </tr>
+              <tr>
+                <td>origin</td>
+                <td>Describes how the key entered KeyMint, such as secure generation or import.</td>
+              </tr>
+            </tbody>
+          </table>
+          <h3>Hardware enforced and software enforced</h3>
+          <p>The attestation record separates authorization information into softwareEnforced and hardwareEnforced lists. A field appearing in hardwareEnforced has a stronger meaning than the same idea being enforced only by normal Android software.</p>
+        </section>
+
+        <section id="verified-boot" class="doc-section searchable">
+          <h2>Verified Boot</h2>
+          <p>Android Verified Boot creates a chain of trust from a hardware protected root through the bootloader and verified partitions. Attestation can expose information about that boot state through rootOfTrust.</p>
+          <table>
+            <thead>
+              <tr>
+                <th>State</th>
+                <th>Meaning</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Verified</td>
+                <td>A trusted chain extends from the hardware root of trust through the verified boot process.</td>
+              </tr>
+              <tr>
+                <td>SelfSigned</td>
+                <td>Boot verification used a user configured root instead of the manufacturer root.</td>
+              </tr>
+              <tr>
+                <td>Unverified</td>
+                <td>The bootloader is unlocked and the normal verified chain of trust cannot be established.</td>
+              </tr>
+              <tr>
+                <td>Failed</td>
+                <td>Boot verification failed and the rest of the root of trust information should not be treated as trustworthy.</td>
+              </tr>
+            </tbody>
+          </table>
+          <h3>deviceLocked</h3>
+          <p>A locked bootloader is an important part of the trust decision because an unlocked bootloader allows system software to be replaced. Do not use boot state alone as your complete security policy. Combine it with the certificate chain, security level, challenge, app identity, patch state, and your own server session rules.</p>
+          <h3>verifiedBootKey</h3>
+          <p>This value is a digest connected to the public key used for the Verified Boot chain of trust. Its meaning changes with the boot state, so interpret it together with deviceLocked and verifiedBootState.</p>
+          <h3>verifiedBootHash</h3>
+          <p>On attestation versions that include it, this represents a digest of data protected by Verified Boot. Android documents the VBMeta digest here for devices using the Android Verified Boot reference implementation.</p>
+        </section>
+
+        <section id="nonce" class="doc-section searchable">
+          <h2>Nonces and replay protection</h2>
+          <p>A nonce is a value intended to be used once. In an attestation flow, your server creates a fresh unpredictable value and later requires the returned attestation evidence to contain that exact value.</p>
+          <h3>Good nonce behavior</h3>
+          <div class="detail-list">
+            <div>
+              <strong>Generate it on the server</strong>
+              <p>Use a cryptographically secure random generator. Do not let the client choose the only value used for replay protection.</p>
+            </div>
+            <div>
+              <strong>Store it with context</strong>
+              <p>Associate it with the expected user, session, request type, creation time, and expiry where appropriate.</p>
+            </div>
+            <div>
+              <strong>Compare exactly</strong>
+              <p>After verification, require the attested nonce to match the server record exactly.</p>
+            </div>
+            <div>
+              <strong>Consume it once</strong>
+              <p>Mark it used in an atomic server operation before granting the protected action.</p>
+            </div>
+            <div>
+              <strong>Expire it quickly</strong>
+              <p>A challenge for a login or sensitive operation normally should not remain usable for a long period just because the signed token itself has a longer maximum validity window.</p>
+            </div>
+          </div>
+          <h3>Binding a nonce to a request</h3>
+          <p>For a sensitive action, a strong design can bind the challenge to information such as a server session identifier, transaction identifier, or a hash of important request data. The server recomputes the expected value when the protected request arrives and checks that the verified attestation carries the same nonce.</p>
+        </section>
+
+        <section id="meta-attestation" class="doc-section searchable">
+          <h2>Meta Quest Attestation API</h2>
+          <p>Meta Quest Application Attestation is a platform service for evaluating whether a request comes from a genuine app binary and a genuine Meta Quest device. Meta documents support for Quest 2, Quest Pro, Quest 3, and Quest 3S. The API is for Android platform apps and requires the client to communicate with Meta attestation services.</p>
+          <h3>Meta flow</h3>
+          <div class="flow">
+            <div><span>1</span><p>Your application server creates a unique challenge_nonce.</p></div>
+            <div><span>2</span><p>The server sends the challenge to the Quest app.</p></div>
+            <div><span>3</span><p>The app calls DeviceApplicationIntegrity.GetIntegrityToken with the challenge.</p></div>
+            <div><span>4</span><p>Meta collects integrity signals and returns a signed attestation token to the app.</p></div>
+            <div><span>5</span><p>The app sends that token to your server.</p></div>
+            <div><span>6</span><p>Your server sends the token to Meta token verification.</p></div>
+            <div><span>7</span><p>Meta verifies the token and returns claims to your server.</p></div>
+            <div><span>8</span><p>Your server validates the claims and applies your access policy.</p></div>
+          </div>
+          <h3>Current Meta requirements and limits</h3>
+          <table>
+            <tbody>
+              <tr>
+                <th>Challenge format</th>
+                <td>Non wrapping Base64URL string created from random bytes by the application server</td>
+              </tr>
+              <tr>
+                <th>Challenge length</th>
+                <td>22 to 172 characters</td>
+              </tr>
+              <tr>
+                <th>SDK requirement in Meta Unity documentation</th>
+                <td>At least v55 of the Meta XR SDK and Meta Horizon OS for the documented integration</td>
+              </tr>
+              <tr>
+                <th>Default token lifetime</th>
+                <td>24 hours</td>
+              </tr>
+              <tr>
+                <th>Device request rate limit</th>
+                <td>100 requests per hour and 200 requests per day per device</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="callout">
+            <strong>Tip</strong>
+            <p>Token lifetime and challenge lifetime are different things. Even if a token can be valid for hours, a one use login challenge can still be accepted only once and expire after a short server defined window.</p>
+          </div>
+        </section>
+
+
+        <section id="meta-deep-dive" class="doc-section searchable">
+          <h2>Meta attestation details</h2>
+          <p>Meta application attestation is most useful when you treat the returned token as evidence that still needs a policy decision. Meta verifies the token signature for you and returns claims. Your backend then decides which claim values are acceptable for the action being requested.</p>
+          <h3>What Meta is trying to answer</h3>
+          <div class="detail-list">
+            <div>
+              <strong>Is the application recognized</strong>
+              <p>The app integrity state tells you whether Meta recognizes the installation as coming from the Horizon Store.</p>
+            </div>
+            <div>
+              <strong>Is the signing identity what you expect</strong>
+              <p>The package certificate digest lets your backend compare the signed claim with the certificate digest values that belong to your real release.</p>
+            </div>
+            <div>
+              <strong>Is the package name what you expect</strong>
+              <p>The package ID claim should match the package ID configured on your server.</p>
+            </div>
+            <div>
+              <strong>Is the Quest device trusted</strong>
+              <p>The device integrity state reports Advanced, Basic, or NotTrusted based on Meta security signals.</p>
+            </div>
+            <div>
+              <strong>Is the response fresh</strong>
+              <p>The nonce, timestamp, and expiration give your server enough information to reject replayed or stale evidence.</p>
+            </div>
+          </div>
+          <h3>Advanced</h3>
+          <p>Meta describes Advanced as a device with a locked bootloader, a valid Android system image, and no signs of system compromise. This is the strongest normal device integrity result documented for the API.</p>
+          <h3>Basic</h3>
+          <p>Basic still means the bootloader is locked and the Android image is valid, but another integrity check failed. Meta specifically notes that this may indicate compromise after boot, including rooting. Whether Basic is acceptable depends on your threat model.</p>
+          <h3>NotTrusted</h3>
+          <p>NotTrusted means Meta saw an unlocked bootloader or an invalid Android system image. For an endpoint that is supposed to require trusted Quest hardware, this should normally fail the integrity policy.</p>
+          <h3>StoreRecognized</h3>
+          <p>StoreRecognized means Meta recognizes the app as legitimately installed through the Meta Quest Store. A server protecting a public store build can normally require this value together with the expected package ID and signing digest.</p>
+          <h3>NotRecognized and NotEvaluated</h3>
+          <p>NotRecognized means the installation is not recognized as legitimate. NotEvaluated means Meta could not identify the app for that evaluation. Do not silently convert either value into StoreRecognized. Decide whether development builds need a separate test policy.</p>
+          <h3>Timestamp should be recent</h3>
+          <p>Meta recommends checking that the timestamp is recent, within a few minutes or less for a normal validation flow. This is separate from the maximum token expiration time. A token that has not expired can still be too old for a login you want to treat as fresh.</p>
+          <h3>Token caching</h3>
+          <p>Meta allows applications to cache attestation tokens within their validity period and recommends caching to avoid rate limits. Your backend should still decide whether a cached token is fresh enough for the current action. Login and account recovery can use a stricter freshness rule than a low risk request.</p>
+          <h3>Rate limits</h3>
+          <p>Meta currently documents a limit of 100 attestation requests per hour and 200 per day for each device. Do not request a new token for every network packet or every gameplay event.</p>
+          <h3>Error handling</h3>
+          <p>A token request can fail because of network problems or platform issues, but malicious software can also block the call. Meta recommends retries with increasing delay. If the app still cannot obtain a token after the retry policy, protected backend access should not be granted as though attestation passed.</p>
+          <div class="callout warning">
+            <strong>Important</strong>
+            <p>Meta verification success proves the token is authentic. Your own backend still has to check the claims. Signature verification alone is not the final security decision.</p>
+          </div>
+        </section>
+
+        <section id="meta-claims" class="doc-section searchable">
+          <h2>Meta token claims</h2>
+          <p>After Meta verifies an attestation token, your server receives attestation claims. Your policy should validate the fields you depend on instead of treating a successful verification response as the entire authorization decision.</p>
+          <h3>Request details</h3>
+          <table>
+            <tbody>
+              <tr>
+                <th>timestamp</th>
+                <td>UTC creation time of the token in seconds.</td>
+              </tr>
+              <tr>
+                <th>exp</th>
+                <td>Expiration time. Meta documents a default of 24 hours after creation.</td>
+              </tr>
+              <tr>
+                <th>nonce</th>
+                <td>The challenge_nonce supplied to GetIntegrityToken. It must match the server challenge you expected.</td>
+              </tr>
+            </tbody>
+          </table>
+          <h3>App state</h3>
+          <table>
+            <tbody>
+              <tr>
+                <th>app_integrity_state</th>
+                <td>StoreRecognized means the app installation is recognized as legitimate by the Meta Quest Store. NotRecognized indicates an illegitimate installation. NotEvaluated means the application could not be identified for that evaluation.</td>
+              </tr>
+              <tr>
+                <th>package_cert_sha256_digest</th>
+                <td>SHA256 digest values for the app signing certificate signatures. Your server can compare them with the signing certificate values you expect.</td>
+              </tr>
+              <tr>
+                <th>package_id</th>
+                <td>The package name reported in the attestation claims.</td>
+              </tr>
+              <tr>
+                <th>version</th>
+                <td>The package version reported in the attestation claims.</td>
+              </tr>
+            </tbody>
+          </table>
+          <h3>Device state</h3>
+          <table>
+            <tbody>
+              <tr>
+                <th>Advanced</th>
+                <td>Meta reports a locked bootloader, valid Android system image, and no signs of system compromise.</td>
+              </tr>
+              <tr>
+                <th>Basic</th>
+                <td>Meta reports a locked bootloader and valid Android system image, but one or more other integrity checks failed and may indicate compromise after boot.</td>
+              </tr>
+              <tr>
+                <th>NotTrusted</th>
+                <td>Meta reports an unlocked bootloader or an invalid Android OS image.</td>
+              </tr>
+              <tr>
+                <th>unique_id</th>
+                <td>App scoped device identifier used by the attestation service. Meta states that it changes every 30 days for privacy.</td>
+              </tr>
+              <tr>
+                <th>security_update_pending_days</th>
+                <td>Number of days since the oldest public security patch missing on the device. Meta advises caution because updates may reach users at different times.</td>
+              </tr>
+            </tbody>
+          </table>
+          <h3>How to read the claims safely</h3>
+          <p>Do not compare the entire decoded object with one fixed JSON shape. Read the fields your policy requires, validate their types and allowed values, and safely ignore new fields you do not use. This keeps a future Meta claim addition from breaking your authentication flow.</p>
+          <h3>Package certificate digests</h3>
+          <p>The certificate digest field can contain more than one value. Keep a server side set of signing certificate digests you currently trust and compare the verified claim against that set. This also gives you a controlled way to handle legitimate signing changes.</p>
+          <h3>Version policy</h3>
+          <p>The version claim can help enforce a minimum supported app version, but do not use it as the only integrity check. A valid version string does not replace StoreRecognized, signing digest validation, or device integrity.</p>
+          <div class="callout warning">
+            <strong>Important</strong>
+            <p>Write your claim parser to tolerate new unknown fields. Reject bad values in fields you require, but do not crash just because Meta adds another claim later.</p>
+          </div>
+        </section>
+
+
+        <section id="meta-device-ban" class="doc-section searchable">
+          <h2>Meta device bans</h2>
+          <p>Meta provides a device ban feature that works with the Attestation API. Your backend identifies the device through the app scoped unique ID from a verified attestation result and sends the ban request to Meta from the server.</p>
+          <h3>How the ban signal is used</h3>
+          <div class="flow">
+            <div><span>1</span><p>Your backend verifies a normal Meta attestation token.</p></div>
+            <div><span>2</span><p>The backend reads the current unique ID from the verified device state.</p></div>
+            <div><span>3</span><p>Your backend creates a device ban through the Meta server interface when your moderation policy allows it.</p></div>
+            <div><span>4</span><p>Later attestation results can include a device ban section showing that the device is banned.</p></div>
+            <div><span>5</span><p>Your own backend enforces the restriction when it sees the ban status.</p></div>
+          </div>
+          <h3>The unique ID rotates</h3>
+          <p>Meta states that the attestation unique ID is scoped to your application and changes every 30 days for privacy. Do not build a permanent hardware identity system around the assumption that this value never changes.</p>
+          <h3>Keep the ban ID when you create a ban</h3>
+          <p>Meta returns a ban ID for a created ban. Meta documents that the ban ID can continue to identify that ban even after the current unique ID has rotated, until the ban expires or is reversed.</p>
+          <h3>Access requirement</h3>
+          <p>The device ban feature requires Attestation API integration and approval through Meta Data Use Checkup. The normal attestation API itself and the optional device ban feature should be treated as separate parts of your design.</p>
+          <h3>Use bans carefully</h3>
+          <p>Attestation can help identify severe repeated abuse, but a ban decision is still your responsibility. Keep moderation evidence and account controls separate from the raw integrity verdict so one temporary device problem does not automatically become a permanent punishment.</p>
+        </section>
+
+        <section id="meta-user-verification" class="doc-section searchable">
+          <h2>Meta user verification</h2>
+          <p>Meta User Verification is separate from application attestation. User Verification helps your server verify that a Meta account identifier supplied by the client is valid for the user providing the proof.</p>
+          <p>The client obtains a user proof nonce through the Platform SDK. Your trusted server sends that nonce and the Meta user identifier to Meta using the user_nonce_validate server to server endpoint. A valid response confirms the user proof. Meta also documents retrieving a verified org scoped ID after the user proof is validated.</p>
+          <h3>What it does not replace</h3>
+          <p>Meta states that User Verification does not replace the Entitlement Check. User identity, ownership entitlement, app integrity, and device integrity are different signals and should not be treated as interchangeable.</p>
+          <h3>Bind the verified user to your own session</h3>
+          <p>After the backend verifies the Meta user proof, connect that verified identity to the same server login attempt that passed your application and device integrity checks. Do not verify the user in one request and then trust a different client supplied user ID later.</p>
+          <h3>Useful separation</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Question</th>
+                <th>Relevant mechanism</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Is this the expected Meta user</td>
+                <td>User Verification</td>
+              </tr>
+              <tr>
+                <td>Does the user own or have access to the app</td>
+                <td>Entitlement Check</td>
+              </tr>
+              <tr>
+                <td>Is this recognized app binary and device state acceptable</td>
+                <td>Meta Quest Attestation API</td>
+              </tr>
+              <tr>
+                <td>Is this Android Keystore key hardware backed with expected properties</td>
+                <td>Android key attestation</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+
+        <section id="combined-signals" class="doc-section searchable">
+          <h2>Combining security signals</h2>
+          <p>The strongest design does not ask one check to do every job. Use each signal for the question it is good at, then let the backend combine the results into one session decision.</p>
+          <h3>Example Quest login</h3>
+          <div class="flow">
+            <div><span>1</span><p>The backend starts a login attempt and creates a fresh one use nonce.</p></div>
+            <div><span>2</span><p>The app obtains Meta application attestation using that nonce.</p></div>
+            <div><span>3</span><p>The backend verifies the Meta token and checks freshness, app identity, signing digest, and device integrity.</p></div>
+            <div><span>4</span><p>The backend verifies the Meta user proof for the account identifier.</p></div>
+            <div><span>5</span><p>The backend performs the entitlement check if ownership is required.</p></div>
+            <div><span>6</span><p>If you use an Android hardware key, the backend can also verify its registration or require proof of possession.</p></div>
+            <div><span>7</span><p>The backend binds the verified account and approved security state to its own short lived session.</p></div>
+          </div>
+          <h3>Why this is better than one giant check</h3>
+          <p>If account proof fails, you know the identity layer failed. If the package digest is wrong, you know the app identity layer failed. If device integrity is NotTrusted, you know the platform integrity layer failed. Keeping the checks separate makes logs easier to understand and policy changes safer.</p>
+          <h3>Use hardware keys for continuity, not as a replacement for attestation</h3>
+          <p>A registered TEE or StrongBox key can be useful for proving that a later request comes from the same protected key. It does not automatically tell you that the current app still has the same Meta integrity state as when the key was registered. Reattestation is still useful when you need a fresh platform verdict.</p>
+          <h3>Use server sessions to avoid checking everything constantly</h3>
+          <p>Once the login passes, create your own session with a clear expiration time and the security facts you care about. Normal API requests can validate that session. Sensitive actions can require a fresh integrity check when needed.</p>
+          <h3>Store the result, not every secret</h3>
+          <p>Store safe facts such as verification time, account identifier, allowed integrity level, key fingerprint, package version, and policy result. Avoid storing raw reusable tokens longer than necessary.</p>
+        </section>
+
+        <section id="server-validation" class="doc-section searchable">
+          <h2>Server validation</h2>
+          <p>The server should be the security boundary. It should not accept a client result such as attestationValid equals true. It should validate the real evidence or ask the platform provider to validate it.</p>
+          <h3>Recommended order for Meta application attestation</h3>
+          <div class="flow">
+            <div><span>1</span><p>Look up the server side challenge record.</p></div>
+            <div><span>2</span><p>Reject missing, expired, already used, or wrong session challenges.</p></div>
+            <div><span>3</span><p>Send the attestation token to Meta verification from the server.</p></div>
+            <div><span>4</span><p>Require Meta verification success.</p></div>
+            <div><span>5</span><p>Decode the returned claims.</p></div>
+            <div><span>6</span><p>Compare nonce with the server challenge.</p></div>
+            <div><span>7</span><p>Check timestamp and expiration against your own freshness policy.</p></div>
+            <div><span>8</span><p>Check package_id, signing certificate digest, app integrity state, and acceptable device integrity state.</p></div>
+            <div><span>9</span><p>Atomically consume the challenge.</p></div>
+            <div><span>10</span><p>Issue your own short lived authenticated server session.</p></div>
+          </div>
+          <h3>Keep secrets off the client</h3>
+          <p>Meta server to server credentials belong only on your backend. Do not put an app secret or server access token in Unity code, JavaScript shipped to a browser, an APK asset, or a public repository.</p>
+          <h3>Fail closed for protected actions</h3>
+          <p>For high value actions, a missing attestation result should not silently become success. Meta specifically warns that compromised clients may block or strip the attestation call. Use controlled retries for temporary network problems, then apply the same cautious policy you would apply to an untrusted integrity result.</p>
+        </section>
+
+        <section id="policy" class="doc-section searchable">
+          <h2>Example security policy</h2>
+          <p>A policy should match your app instead of copying the strictest possible setting. A multiplayer game login, a purchase, an account recovery action, and a low risk public endpoint do not need identical rules.</p>
+          <h3>Example login policy</h3>
+          <div class="policy-grid">
+            <div>
+              <strong>Require</strong>
+              <p>Valid server challenge, successful Meta token verification, exact nonce match, expected package ID, expected signing certificate digest, recognized app state, acceptable device integrity state, recent token timestamp, and a challenge that has not been used before.</p>
+            </div>
+            <div>
+              <strong>Then issue</strong>
+              <p>A server session token with a shorter lifetime than the attestation token. Bind the session to the verified account or internal player identity.</p>
+            </div>
+            <div>
+              <strong>Recheck</strong>
+              <p>Run attestation again when the session expires, after a meaningful risk event, or before a sensitive operation that needs fresher integrity evidence.</p>
+            </div>
+          </div>
+          <h3>Patch policy</h3>
+          <p>Do not automatically ban every device that is one day behind a new security update. Meta warns that update rollout speed varies. A reasonable policy can log patch age, apply a warning window, and become stricter only when the risk of a known old build justifies it.</p>
+          <h3>Basic versus Advanced</h3>
+          <p>If your threat model needs the strongest Meta device signal, require Advanced. If your app can safely support Basic, document exactly what access Basic receives. Do not accidentally treat NotTrusted as a temporary warning if the protected endpoint is supposed to require an intact device.</p>
+        </section>
+
+        <section id="limits" class="doc-section searchable">
+          <h2>What attestation cannot prove</h2>
+          <p>Attestation is strong evidence, not magic. A good design understands its limits.</p>
+          <div class="detail-list">
+            <div>
+              <strong>It does not make client code secret</strong>
+              <p>Attackers can still inspect application files, native libraries, network behavior, and public protocol formats.</p>
+            </div>
+            <div>
+              <strong>It does not replace authorization</strong>
+              <p>A genuine app on a genuine device does not automatically mean the user is allowed to perform every action.</p>
+            </div>
+            <div>
+              <strong>It does not validate your game rules</strong>
+              <p>Server authoritative gameplay, rate limits, inventory validation, purchase validation, and abuse prevention logic still matter.</p>
+            </div>
+            <div>
+              <strong>It does not make old evidence fresh</strong>
+              <p>A signed token can still be inappropriate for a new transaction if the challenge was not bound to that transaction or if your freshness window is too large.</p>
+            </div>
+            <div>
+              <strong>It does not prove a person is honest</strong>
+              <p>Integrity signals describe software, hardware, or account proof. They do not replace moderation, fraud detection, or behavioral controls.</p>
+            </div>
+          </div>
+        </section>
+
+        <section id="mistakes" class="doc-section searchable">
+          <h2>Common mistakes</h2>
+          <div class="mistake-list">
+            <div>
+              <h3>Validating only on the client</h3>
+              <p>A modified client can patch the result. The server needs to make the final decision.</p>
+            </div>
+            <div>
+              <h3>Trusting client supplied hashes</h3>
+              <p>A client can send the hash value you expect. Prefer signed attestation claims or server side platform verification.</p>
+            </div>
+            <div>
+              <h3>Reusing nonces</h3>
+              <p>A reusable challenge turns fresh attestation into replayable evidence.</p>
+            </div>
+            <div>
+              <h3>Checking only the signature</h3>
+              <p>A valid signed token still needs claim checks. Validate nonce, time, app identity, signing certificate, and integrity verdicts.</p>
+            </div>
+            <div>
+              <h3>Hardcoding one Android attestation root forever</h3>
+              <p>Trust roots can rotate. Android added another root for chains beginning February 1, 2026. Follow the official root list rather than copying an old single certificate from a tutorial.</p>
+            </div>
+            <div>
+              <h3>Confusing identity with integrity</h3>
+              <p>Knowing the Meta account does not prove the APK is intact. Knowing the APK is recognized does not prove the current account owns the app.</p>
+            </div>
+            <div>
+              <h3>Using a permanent device identifier assumption</h3>
+              <p>Meta documents that the attestation unique_id is app scoped and rotates every 30 days.</p>
+            </div>
+            <div>
+              <h3>Rejecting every temporary attestation error immediately</h3>
+              <p>Network and infrastructure failures happen. Retry with backoff, but do not turn repeated failure into automatic trust.</p>
+            </div>
+          </div>
+        </section>
+
+        <section id="testing" class="doc-section searchable">
+          <h2>Testing</h2>
+          <p>Test the negative path as carefully as the success path. A security system that works only when every service is healthy is incomplete.</p>
+          <table>
+            <thead>
+              <tr>
+                <th>Test</th>
+                <th>Expected server behavior</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Correct token and correct nonce</td>
+                <td>Continue only if all required claims also pass.</td>
+              </tr>
+              <tr>
+                <td>Correct token with wrong server nonce</td>
+                <td>Reject.</td>
+              </tr>
+              <tr>
+                <td>Same challenge submitted twice</td>
+                <td>First valid use may succeed. Later use is rejected.</td>
+              </tr>
+              <tr>
+                <td>Wrong package ID</td>
+                <td>Reject.</td>
+              </tr>
+              <tr>
+                <td>Wrong signing certificate digest</td>
+                <td>Reject.</td>
+              </tr>
+              <tr>
+                <td>Expired token</td>
+                <td>Reject and request fresh evidence.</td>
+              </tr>
+              <tr>
+                <td>Old timestamp inside your freshness window policy</td>
+                <td>Apply the policy you documented. Do not rely only on maximum token lifetime.</td>
+              </tr>
+              <tr>
+                <td>Meta service unavailable</td>
+                <td>Retry with backoff. Protected operations remain unavailable if verification cannot be established.</td>
+              </tr>
+              <tr>
+                <td>Unexpected new claim</td>
+                <td>Ignore unknown fields safely while continuing to enforce known required fields.</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section id="validation-tips" class="doc-section searchable">
+          <h2>Validation tips</h2>
+          <p>Good attestation is mostly about what your server refuses to trust. Keep the rules small, check the important values every time they matter, and never let the client decide whether it passed.</p>
+
+          <h3>Server side tips</h3>
+          <div class="detail-list">
+            <div>
+              <strong>Create the nonce on your server</strong>
+              <p>Do not let the client choose its own challenge. Generate a random nonce on the backend, save it with a short expiration time, and send that nonce to the client.</p>
+            </div>
+            <div>
+              <strong>Use every nonce once</strong>
+              <p>After a valid attestation uses a nonce, mark it used in the same database operation that accepts the request. Two requests should never be able to spend the same nonce at the same time.</p>
+            </div>
+            <div>
+              <strong>Bind the nonce to the login</strong>
+              <p>Save which user, login attempt, session, or protected action the nonce belongs to. A valid token for one login should not be accepted for another login.</p>
+            </div>
+            <div>
+              <strong>Compare exact app identity</strong>
+              <p>Check the returned package ID and signing certificate digest against values stored on your server. Do not accept the package name or expected hash from the client.</p>
+            </div>
+            <div>
+              <strong>Check the integrity verdict</strong>
+              <p>A token can be correctly signed and still contain a result your app should reject. Check the app integrity state and device integrity state instead of stopping after token verification succeeds.</p>
+            </div>
+            <div>
+              <strong>Use your own freshness window</strong>
+              <p>Meta tokens have their own expiration, but your backend can require a much newer token for login or a sensitive action. Check the timestamp, expiration, and nonce together.</p>
+            </div>
+            <div>
+              <strong>Issue a backend session after success</strong>
+              <p>You usually do not need to run full attestation on every normal game request. After a successful login check, issue your own short lived authenticated session and validate that session on later requests.</p>
+            </div>
+            <div>
+              <strong>Recheck when the risk changes</strong>
+              <p>Run a fresh check for a new login, a new device session, account recovery, important purchases, or other actions where an old integrity result is not enough.</p>
+            </div>
+          </div>
+
+          <h3>Do not trust these from the client</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Client value</th>
+                <th>What the server should do instead</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>attestationValid</td>
+                <td>Verify the real token with Meta and check the returned claims.</td>
+              </tr>
+              <tr>
+                <td>package ID</td>
+                <td>Compare the verified claim with the package ID stored in server configuration.</td>
+              </tr>
+              <tr>
+                <td>signing hash</td>
+                <td>Compare the verified signing digest with a server side allowlist.</td>
+              </tr>
+              <tr>
+                <td>device integrity result</td>
+                <td>Use the value returned by the trusted attestation result.</td>
+              </tr>
+              <tr>
+                <td>user ID by itself</td>
+                <td>Verify the user through the platform flow and bind it to the server session.</td>
+              </tr>
+              <tr>
+                <td>request timestamp</td>
+                <td>Use server time for expiration and replay decisions.</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <h3>Android hardware attestation tips</h3>
+          <div class="detail-list">
+            <div>
+              <strong>Validate on a separate trusted server</strong>
+              <p>Do not validate a hardware attestation chain only on the same Android device that produced it. A compromised device could also interfere with the local validation code.</p>
+            </div>
+            <div>
+              <strong>Validate the whole certificate chain</strong>
+              <p>Check the trusted root, every certificate signature in the chain, certificate validity, and revocation status. Successfully parsing the certificates is not enough.</p>
+            </div>
+            <div>
+              <strong>Check the challenge</strong>
+              <p>The attestation challenge should match the fresh challenge your server created. This proves the attestation was created for the request your server is currently checking.</p>
+            </div>
+            <div>
+              <strong>Check where the key lives</strong>
+              <p>Read the attestation security level and KeyMint security level. If your policy requires hardware protection, do not silently treat a software backed result as equivalent to TEE or StrongBox.</p>
+            </div>
+            <div>
+              <strong>Check boot state when your policy needs it</strong>
+              <p>Verified Boot information can help show whether the device booted software that matches its trusted boot configuration. Decide which states your app accepts before you ship.</p>
+            </div>
+            <div>
+              <strong>Keep trusted roots current</strong>
+              <p>Do not copy one old Android attestation root into your backend and forget it. Google can rotate or add attestation roots, so keep your trust list based on the current Android documentation.</p>
+            </div>
+          </div>
+
+          <h3>Small things that prevent big mistakes</h3>
+          <div class="detail-list">
+            <div>
+              <strong>Keep secrets on the backend</strong>
+              <p>Meta app secrets, server access tokens, database credentials, and signing secrets should never be shipped inside the APK.</p>
+            </div>
+            <div>
+              <strong>Use generic public errors</strong>
+              <p>The client usually only needs to know that authentication failed. Keep the exact failed check in private server logs so you do not give attackers a map of your validation rules.</p>
+            </div>
+            <div>
+              <strong>Do not log raw secrets</strong>
+              <p>Redact attestation tokens, session tickets, access tokens, app secrets, and other reusable credentials. Log request IDs and safe identity fields instead.</p>
+            </div>
+            <div>
+              <strong>Rate limit challenge creation</strong>
+              <p>Do not allow one client or account to create unlimited challenges or verification requests. Expire unused challenges and limit how many can be active at once.</p>
+            </div>
+            <div>
+              <strong>Separate network failure from failed integrity</strong>
+              <p>A timeout is not the same thing as a bad integrity verdict. You can retry temporary service errors while still refusing protected access until validation actually succeeds.</p>
+            </div>
+            <div>
+              <strong>Test the failure paths</strong>
+              <p>Try an expired nonce, reused nonce, wrong package, wrong signing digest, expired token, missing token, and two requests using the same nonce. Security code is only useful if the rejection paths work too.</p>
+            </div>
+          </div>
+
+          <div class="callout">
+            <strong>Simple rule</strong>
+            <p>Trust verified evidence from the platform, values your own server created, and data already tied to an authenticated server session. Treat everything else from the client as input that still needs validation.</p>
+          </div>
+        </section>
+
+        <section id="references" class="doc-section searchable">
+          <h2>Official references</h2>
+          <p>These are the primary sources used for the technical details in this site. Check them again before shipping security logic because platform behavior, SDK requirements, trust roots, limits, and recommendations can change.</p>
+          <div class="reference-list">
+            <a href="https://developers.meta.com/horizon/documentation/unity/ps-attestation-api/" target="_blank" rel="noreferrer">Meta Quest Attestation API</a>
+            <a href="https://developers.meta.com/horizon/documentation/unreal/ps-ownership/" target="_blank" rel="noreferrer">Meta User Verification</a>
+            <a href="https://developers.meta.com/horizon/resources/protecting-your-app/" target="_blank" rel="noreferrer">Meta Protecting Your App</a>
+            <a href="https://developer.android.com/privacy-and-security/security-key-attestation" target="_blank" rel="noreferrer">Android Verify Hardware Backed Key Pairs with Key Attestation</a>
+            <a href="https://source.android.com/docs/security/features/keystore/attestation" target="_blank" rel="noreferrer">Android Key and ID Attestation Schema</a>
+            <a href="https://developer.android.com/privacy-and-security/keystore" target="_blank" rel="noreferrer">Android Keystore System</a>
+            <a href="https://source.android.com/docs/security/features/keystore/features" target="_blank" rel="noreferrer">Android KeyMint and Keystore Features</a>
+            <a href="https://source.android.com/docs/security/features/trusty" target="_blank" rel="noreferrer">Android Trusty TEE</a>
+            <a href="https://developer.android.com/reference/android/security/keystore/KeyGenParameterSpec.Builder" target="_blank" rel="noreferrer">Android Key Generation Parameters</a>
+            <a href="https://developer.android.com/reference/android/security/keystore/StrongBoxUnavailableException" target="_blank" rel="noreferrer">Android StrongBox Availability</a>
+          </div>
+          <p class="review-date">Content reviewed against official documentation on August 20, 2026.</p>
+        </section>
+
+        <div id="no-results" class="no-results" hidden>No matching documentation found.</div>
+      </article>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
