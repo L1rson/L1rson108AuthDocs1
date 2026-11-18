@@ -8,16 +8,20 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <div class="reading-progress" id="reading-progress" aria-hidden="true"></div>
   <div class="site-shell">
     <aside class="sidebar" id="sidebar">
       <div class="brand">
+        <span class="brand-mark" aria-hidden="true"><span></span></span>
         <a href="#overview">Hardware and Attestation</a>
         <p>Practical security documentation</p>
       </div>
 
       <label class="search-label" for="doc-search">Search documentation</label>
-      <input id="doc-search" class="search" type="search" placeholder="Search terms" autocomplete="off">
+      <div class="search-field"><span class="search-icon" aria-hidden="true"></span><input id="doc-search" class="search" type="search" placeholder="Search terms" autocomplete="off"><kbd class="search-shortcut">/</kbd></div>
+      <p class="search-feedback" id="search-feedback" role="status" aria-live="polite">Browse the complete field guide</p>
 
+      <p class="nav-heading">Contents <span id="section-count"></span></p>
       <nav class="nav" aria-label="Documentation navigation">
         <a href="#overview">Overview</a>
         <a href="#trust-model">Trust model</a>
@@ -46,21 +50,47 @@
         <a href="#mistakes">Common mistakes</a>
         <a href="#testing">Testing</a>
         <a href="#validation-tips">Validation tips</a>
+        <a href="#auth-architecture">Server authentication architecture</a>
+        <a href="#challenge-service">Challenge creation and replay control</a>
+        <a href="#meta-server-verification">Meta integrity verification on the server</a>
+        <a href="#hardware-server-verification">Hardware key verification on the server</a>
+        <a href="#key-possession">Proof of key possession</a>
+        <a href="#session-authority">Session issuance and authorization</a>
+        <a href="#failure-policy">Failure handling and production monitoring</a>
         <a href="#references">Official references</a>
       </nav>
+      <div class="sidebar-footer"><span class="footer-dot" aria-hidden="true"></span> Research notes / November 2026</div>
     </aside>
 
     <main class="main">
       <div class="mobile-topbar">
-        <button id="menu-button" class="menu-button" type="button">Menu</button>
+        <button id="menu-button" class="menu-button" type="button" aria-controls="sidebar" aria-expanded="false" aria-label="Open contents"><span class="menu-bars"><i></i><i></i></span><span class="menu-button-text">Menu</span></button>
         <span>Hardware and Attestation</span>
       </div>
 
+      <div class="main-topline"><span><i aria-hidden="true"></i> TECHNICAL REFERENCE / SECURITY ENGINEERING</span><span>RESEARCH UPDATE 18 NOV 2026</span></div>
       <article class="content" id="content">
         <section id="overview" class="doc-section hero searchable">
-          <p class="eyebrow">Security documentation</p>
-          <h1>Hardware backed security and attestation</h1>
-          <p class="lead">Attestation is a way for a server to ask for evidence about the app, the device, or a cryptographic key before trusting a request. The important part is that the decision is made by a trusted server, not by the same client that might be modified.</p>
+          <div class="hero-intro">
+            <div class="hero-copy">
+              <p class="eyebrow">Security documentation</p>
+              <h1>Hardware backed security and attestation</h1>
+              <p class="lead">Attestation is a way for a server to ask for evidence about the app, the device, or a cryptographic key before trusting a request. The important part is that the decision is made by a trusted server, not by the same client that might be modified.</p>
+              <a class="hero-discover" href="#trust-model">Explore the documentation <span aria-hidden="true">↗</span></a>
+            </div>
+            <div class="hero-graphic" role="img" aria-label="Illustration of client evidence moving through platform verification to a server authorization decision">
+              <div class="graphic-meta"><span>FIG. 001</span><span>TRUST BOUNDARY</span></div>
+              <div class="graphic-orbit graphic-orbit-one"></div>
+              <div class="graphic-orbit graphic-orbit-two"></div>
+              <div class="graphic-orbit graphic-orbit-three"></div>
+              <div class="graphic-core"><span class="core-icon"></span><span>VERIFY</span><small>DO NOT ASSUME</small></div>
+              <div class="graphic-node node-client"><span>01</span><strong>CLIENT</strong><small>Evidence</small></div>
+              <div class="graphic-node node-platform"><span>02</span><strong>PLATFORM</strong><small>Integrity</small></div>
+              <div class="graphic-node node-server"><span>03</span><strong>SERVER</strong><small>Authority</small></div>
+              <div class="graphic-foot"><span>Proof becomes policy</span><span class="graphic-led"></span></div>
+            </div>
+          </div>
+          <div class="hero-summary-heading"><span>THE FOUR FOUNDATIONS</span><span>01 — 04</span></div>
           <div class="summary-grid">
             <div class="summary-card">
               <h2>TEE</h2>
@@ -1104,6 +1134,126 @@
           </div>
         </section>
 
+
+        <section id="auth-architecture" class="doc-section searchable research-section">
+          <h2>Server authentication architecture</h2>
+          <p>A secure multiplayer login is a sequence of separate decisions. Account ownership, application integrity, device integrity, hardware key possession, and permission to enter a multiplayer room are not interchangeable. Each claim needs its own source of evidence and its own verification step.</p>
+          <div class="architecture-strip" aria-label="Authentication decision sequence">
+            <div><small>01 / Identity</small><strong>Verify the account</strong><span>Meta user proof</span></div>
+            <div><small>02 / Integrity</small><strong>Verify the runtime</strong><span>Meta attestation</span></div>
+            <div><small>03 / Possession</small><strong>Verify the key</strong><span>Android attestation</span></div>
+            <div><small>04 / Authority</small><strong>Issue access</strong><span>Server session</span></div>
+          </div>
+          <h3>Establish the account identity first</h3>
+          <p>Read the Meta user identifier through the Platform SDK and obtain a proof using <code>Users.GetUserProof()</code>. Send both values to your backend. From a trusted server, submit the proof and identifier to <code>https://graph.oculus.com/user_nonce_validate</code> using the application access token. Only accept an explicit successful result. Meta documents that a user proof is consumed by verification and is not a general authentication token that can be reused indefinitely.</p>
+          <p>The Meta User ID feature may require approval through Data Use Checkup. If permission is missing, the user identifier may be <code>0</code> or retrieval may fail. Treat that as an unavailable identity signal, never as a valid account. After verification, retrieve <code>org_scoped_id</code> from Meta on the server if your identity model uses it. An identifier written directly into a client request is not verified identity.</p>
+          <h3>Separate verification from authorization</h3>
+          <p>Even a genuine application running on a trusted headset should not be permitted to create arbitrary accounts, issue virtual currency, access administrative APIs, or grant itself a matchmaking role. The backend must check the authenticated user, entitlement, account restrictions, requested action, current session state, and resource permissions independently.</p>
+          <div class="callout"><strong>Server authority</strong><p>The client submits proof and requests actions. Only the server produces account bindings, session records, access decisions, and privileged service credentials.</p></div>
+          <p class="source-note">Verified with <a href="https://developers.meta.com/vr/documentation/unity/ps-ownership/" target="_blank" rel="noreferrer">Meta User Verification</a> and <a href="https://developers.meta.com/vr/resources/protecting-your-app/" target="_blank" rel="noreferrer">Meta application protection guidance</a>.</p>
+        </section>
+
+        <section id="challenge-service" class="doc-section searchable research-section">
+          <h2>Challenge creation and replay control</h2>
+          <p>Begin a login by creating an unpredictable challenge on the server with a cryptographically secure random generator. Meta specifies a nonwrapping Base64URL value between 22 and 172 characters for <code>challenge_nonce</code>. Sixteen uniformly random bytes encode to 22 Base64URL characters without padding. More random bytes are also acceptable within the documented size limit.</p>
+          <h3>Persist the challenge as a transaction</h3>
+          <div class="detail-list">
+            <div><strong>Request identifier</strong><p>Generate an opaque transaction identifier and bind it to the nonce so the server can identify the exact login attempt.</p></div>
+            <div><strong>Context binding</strong><p>Record the intended operation, account candidate, application identity, expiration time, and expected proof types. Reject evidence submitted for a different transaction.</p></div>
+            <div><strong>Single use state</strong><p>Keep a pending or consumed state in shared durable storage. Once evidence is accepted, consume the challenge with one atomic conditional update. Two simultaneous requests must not both succeed.</p></div>
+            <div><strong>Expiration and cleanup</strong><p>Reject stale challenges and delete expired records. Expiration alone does not prevent replay while a challenge is still valid.</p></div>
+          </div>
+          <h3>Atomic acceptance matters</h3>
+          <p>Use a conditional database operation that succeeds only when the challenge is still pending, has not expired, and matches the intended transaction. Create the authenticated session only if that operation succeeds. In distributed services, checking the state and updating it in separate requests creates a race that attackers can exploit.</p>
+          <p>The Meta token expiry is not a recommended lifetime for an unused login challenge. Meta documents a default token validity of 24 hours, while a backend can apply a much shorter freshness limit to an actual login. The maximum platform lifetime and your acceptance window are separate controls.</p>
+          <p class="source-note">Verified with <a href="https://developers.meta.com/vr/documentation/spatial-sdk/ps-attestation-api/" target="_blank" rel="noreferrer">Meta Attestation API</a> and <a href="https://developers.meta.com/vr/resources/protecting-your-app/" target="_blank" rel="noreferrer">Meta integration recommendations</a>.</p>
+        </section>
+
+        <section id="meta-server-verification" class="doc-section searchable research-section">
+          <h2>Meta integrity verification on the server</h2>
+          <p>On the headset, request the attestation token with <code>DeviceApplicationIntegrity.GetIntegrityToken(challengeNonce)</code> in the Unity Platform SDK. The device sends the resulting token to your application server. A server does not accept a decoded token merely because its content looks correct. It submits the original token to Meta and evaluates the verified claims returned by Meta.</p>
+          <h3>Verification request</h3>
+          <pre><code>https://graph.oculus.com/platform_integrity/verify?token=&lt;attestation_token&gt;&amp;access_token=&lt;access_token&gt;</code></pre>
+          <p>The application access token uses the Meta documented <code>OC|App_ID|App_Secret</code> format and belongs on trusted infrastructure, not inside a Unity build or a publicly served page. Keep credentials out of URLs in application logs, proxy traces, analytics, and error reports. A successful response contains a Base64URL encoded claims value that the backend decodes and checks.</p>
+          <div class="signal-table"><div><span>request_details</span><strong>Freshness</strong><p>Match <code>nonce</code> exactly and validate <code>timestamp</code> plus <code>exp</code> using server time.</p></div><div><span>app_state</span><strong>Application identity</strong><p>Check <code>package_id</code>, <code>package_cert_sha256_digest</code>, <code>version</code>, and the permitted <code>app_integrity_state</code>.</p></div><div><span>device_state</span><strong>Platform condition</strong><p>Evaluate <code>device_integrity_state</code>, available security update information, and any supported ban status.</p></div></div>
+          <h3>Interpret the actual device states</h3>
+          <p>Meta documents <code>Advanced</code>, <code>Basic</code>, and <code>NotTrusted</code>. Advanced reports an approved boot image, a locked bootloader, and no detected signs of compromise. Basic indicates that the boot image and lock state passed, but other system checks failed. NotTrusted indicates an unlocked bootloader or an unapproved operating system image. Choose the accepted level based on the security requirements of the action instead of treating every nonempty value as success.</p>
+          <p>For application recognition, Meta documents <code>StoreRecognized</code>, <code>NotRecognized</code>, and <code>NotEvaluated</code>. Requiring StoreRecognized is appropriate for production distribution that expects Store recognition, but development and testing builds may need a separately controlled policy. Never turn a development exception into a public production bypass.</p>
+          <div class="callout warning"><strong>Do not confuse validity and permission</strong><p>A cryptographically valid token is only evidence. An expired token, wrong nonce, wrong package, unexpected signing certificate, unacceptable device state, or active ban must still fail the relevant authorization policy.</p></div>
+          <p class="source-note">Verified with <a href="https://developers.meta.com/vr/documentation/spatial-sdk/ps-attestation-api/" target="_blank" rel="noreferrer">Meta token verification and claim definitions</a>.</p>
+        </section>
+
+        <section id="hardware-server-verification" class="doc-section searchable research-section">
+          <h2>Hardware key verification on the server</h2>
+          <p>A hardware key can support proof of possession when the backend validates its attestation chain and later verifies signatures using the registered public key. This is a separate security mechanism from Meta application attestation. It must not be presented as proof that a particular Quest build came from the Horizon Store.</p>
+          <h3>Chain validation sequence</h3>
+          <div class="flow">
+            <div><span>1</span><p>Receive the full X.509 certificate chain and verify every certificate signature and issuer relationship against an explicitly trusted root.</p></div>
+            <div><span>2</span><p>Check validity periods and revocation status using the rules applicable to the actual attestation provider.</p></div>
+            <div><span>3</span><p>Locate the first trusted Android key attestation extension in the chain, rather than assuming it is always on the leaf certificate.</p></div>
+            <div><span>4</span><p>Confirm the challenge generated by the server, the expected public key, attestation and key security levels, and relevant application identity values.</p></div>
+            <div><span>5</span><p>Evaluate <code>RootOfTrust</code>, including <code>deviceLocked</code>, <code>verifiedBootState</code>, and the available operating system, vendor, and boot patch levels.</p></div>
+            <div><span>6</span><p>Register only the approved public key fingerprint and its identity association. Require signatures from that registered key on later challenges.</p></div>
+          </div>
+          <h3>Android trust roots changed in 2026</h3>
+          <p>Google updated its Android key attestation guidance to include an additional root certificate that began signing chains on February 1, 2026. A verifier restricted to an older root can reject legitimate newer certificates. Google also provides a published root set and an attestation certificate status service. Its guidance recommends using the maintained Android attestation verification library rather than relying on a custom parser that misses certificate edge cases.</p>
+          <p>Google root requirements are conditional. The Android documentation explicitly describes devices with Google Play services and Google certified hardware. Do not assume that every Meta Quest headset uses the same trust anchor or that its KeyMint implementation exposes identical attestation support. Establish the actual issuer chain and documented device support before enforcing any Quest specific hardware policy.</p>
+          <h3>Remote Key Provisioning in Android 16</h3>
+          <p>Google documents Remote Key Provisioning as the only supported attestation key provisioning approach on devices that launch with Android 16. It reduces dependence on factory installed attestation keys and supports more targeted revocation. This Android platform change does not establish what any particular Quest firmware supports. Verify the actual certificate issuer and device capabilities rather than treating the operating system version as proof of a specific key provider.</p>
+          <h3>Boot state is not a single boolean</h3>
+          <p>In the Android attestation schema, <code>Verified</code> means a verified chain of boot trust. <code>SelfSigned</code> indicates a user configured root, <code>Unverified</code> indicates an unlocked bootloader, and <code>Failed</code> indicates a failed verification. Compare these values against your actual acceptance policy. A client supplied <code>deviceLocked</code> field has no authority unless it came from a verified attestation record.</p>
+          <p class="source-note">Verified with <a href="https://developer.android.com/privacy-and-security/security-key-attestation" target="_blank" rel="noreferrer">Android key attestation verification</a> and <a href="https://source.android.com/docs/security/features/keystore/attestation" target="_blank" rel="noreferrer">Android attestation schema</a>.</p>
+        </section>
+
+        <section id="key-possession" class="doc-section searchable research-section">
+          <h2>Proof of key possession</h2>
+          <p>Key attestation establishes properties of a key at the time the key was created. It does not prove that the same key is controlling every later request. Require a separate signature over a fresh server challenge to demonstrate that the current client can still use the registered private key.</p>
+          <div class="three-column">
+            <div><h3>Enrollment</h3><p>Verify the hardware attestation chain and register the attested public key with the authenticated account and expected application.</p></div>
+            <div><h3>Authentication</h3><p>Challenge the client to sign a canonical statement containing the current nonce, session context, and intended action.</p></div>
+            <div><h3>Renewal</h3><p>Verify a fresh signature during renewal, sensitive operations, or a policy change. Reevaluate integrity when the security context demands it.</p></div>
+          </div>
+          <h3>What the signature must cover</h3>
+          <p>Construct the signed input on the server from a versioned, unambiguous encoding of the nonce, account binding, transaction identifier, intended operation, and an expiration boundary. Verify using the public key previously approved by the attestation verifier. Reject a signature over a different operation or context even if the cryptography itself succeeds.</p>
+          <p>The private key must remain nonexportable when supported by the device keystore. A signing API returning success is not proof of hardware protection; only the verified chain and the accepted security level support that claim. Handle unsupported StrongBox or key attestation as explicit platform capability decisions, not by silently accepting an ordinary software key as equivalent.</p>
+          <div class="callout"><strong>Possession is not authorization</strong><p>A correct signature proves control of a key. It does not prove that the account owns a game item, is allowed to join a room, or is exempt from a restriction.</p></div>
+          <p class="source-note">Verified with <a href="https://developer.android.com/privacy-and-security/security-key-attestation" target="_blank" rel="noreferrer">Android key verification guidance</a> and <a href="https://developer.android.com/reference/android/security/keystore/KeyGenParameterSpec" target="_blank" rel="noreferrer">Android Keystore key generation reference</a>.</p>
+        </section>
+
+        <section id="session-authority" class="doc-section searchable research-section">
+          <h2>Session issuance and authorization</h2>
+          <p>After the backend has verified identity, integrity, challenge freshness, and any required proof of possession, it may create its own session. The session should bind to the verified account, the accepted application identity, the approved key or device signal when applicable, and the server policy version used for the decision.</p>
+          <table><thead><tr><th>Control</th><th>Server responsibility</th></tr></thead><tbody>
+            <tr><td>Session identity</td><td>Generate a cryptographically unpredictable identifier and associate it with a stored account and explicit allowed actions.</td></tr>
+            <tr><td>Expiry</td><td>Enforce both absolute expiry and inactivity limits on the server. Client timers are only presentation aids.</td></tr>
+            <tr><td>Renewal</td><td>Rotate credentials when renewing authority. Require new evidence when the previous security decision is no longer fresh enough.</td></tr>
+            <tr><td>Revocation</td><td>Invalidate server session records on logout, account restriction, security compromise, or key replacement.</td></tr>
+            <tr><td>Authorization</td><td>Check ownership and action scope on every sensitive request, not only at login.</td></tr>
+            <tr><td>Audit</td><td>Record verification outcomes and correlation identifiers without recording raw secret keys, reusable proofs, or full bearer credentials.</td></tr>
+          </tbody></table>
+          <h3>Integrating PlayFab and Photon</h3>
+          <p>PlayFab developer secret keys authorize server and administrator APIs. They must remain on trusted infrastructure. When validating a PlayFab session ticket, the documented <code>Server/AuthenticateSessionTicket</code> endpoint requires that secret. Do not assume that a PlayFab session ticket is proof of Quest integrity.</p>
+          <p>Photon PUN 2 supports custom authentication through a configured server endpoint. That endpoint can check a backend issued login credential and return the documented Photon authentication response. Photon also documents an integration with PlayFab, but the service integration is a distinct trust decision from Meta attestation. Associate the authenticated identity with the server session before permitting matchmaking or game actions, and avoid placing a reusable administrative secret in client authentication parameters.</p>
+          <p>For multiplayer games, entering a room must not automatically grant permission to change player statistics, grant currency, modify another account, or impersonate another user. Treat network events as requests subject to validation, not as trusted instructions.</p>
+          <p class="source-note">Verified with <a href="https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html" target="_blank" rel="noreferrer">OWASP session management guidance</a>, <a href="https://learn.microsoft.com/gaming/playfab/live-service-management/gamemanager/secret-key-management" target="_blank" rel="noreferrer">PlayFab secret key management</a>, and <a href="https://doc.photonengine.com/pun/current/connection-and-authentication/authentication/custom-authentication" target="_blank" rel="noreferrer">Photon custom authentication</a>.</p>
+        </section>
+
+        <section id="failure-policy" class="doc-section searchable research-section">
+          <h2>Failure handling and production monitoring</h2>
+          <p>Security checks should have explicit outcomes. A network timeout is not the same as invalid evidence, and neither is the same as a legitimate device that lacks a particular optional hardware feature. Distinguishing failures prevents accidental access and unnecessary rejection of real users.</p>
+          <div class="policy-grid">
+            <div><strong>Invalid evidence</strong><p>Reject the requested privilege. Log a structured reason such as wrong nonce, untrusted package, invalid certificate chain, or invalid signature.</p></div>
+            <div><strong>Provider unavailable</strong><p>Retry transient verification failures with bounded delays. Keep sensitive features unavailable until verification completes.</p></div>
+            <div><strong>Unsupported capability</strong><p>Apply a documented compatibility policy. Never silently label a software only fallback as hardware attested.</p></div>
+          </div>
+          <h3>Production observability</h3>
+          <p>Record the transaction identifier, platform API operation, application version, decision time, verification provider status, rejection category, and policy version. Rate limit challenge creation and verification requests by the account and other abuse signals. Keep Meta app credentials, user proof values, complete attestation tokens, and private session secrets out of logs and monitoring systems.</p>
+          <h3>Test the full rejection matrix</h3>
+          <p>Test a valid login, invalid user proof, reused challenge, concurrent duplicate submissions, an expired challenge, token expiry, wrong signing certificate, unexpected package, altered challenge, banned account, revoked key, lost connectivity, Meta verification failure, invalid certificate chain, and an unsupported hardware mode. Every denial should leave the backend without a newly authorized session.</p>
+          <div class="callout warning"><strong>Deployment rule</strong><p>Verification policy belongs to the server. Production exceptions must be explicit, limited to an approved environment, and auditable. An exception for test devices must never authorize arbitrary public clients.</p></div>
+          <p class="source-note">Verified with <a href="https://developers.meta.com/vr/resources/protecting-your-app/" target="_blank" rel="noreferrer">Meta failure guidance</a> and <a href="https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html" target="_blank" rel="noreferrer">OWASP session controls</a>.</p>
+        </section>
+
         <section id="references" class="doc-section searchable">
           <h2>Official references</h2>
           <p>These are the primary sources used for the technical details in this site. Check them again before shipping security logic because platform behavior, SDK requirements, trust roots, limits, and recommendations can change.</p>
@@ -1120,12 +1270,23 @@
             <a href="https://developer.android.com/reference/android/security/keystore/StrongBoxUnavailableException" target="_blank" rel="noreferrer">Android StrongBox Availability</a>
           </div>
           <p class="review-date">Content Up To Date And Checked By L1rson108 Lastly On August 20, 2026.</p>
+          <p class="source-note research-reviewed">Additional server authentication and attestation research verified against Meta, Android, OWASP, Photon, and PlayFab documentation on November 18, 2026. Original documentation and its review statement are preserved.</p>
         </section>
 
         <div id="no-results" class="no-results" hidden>No matching documentation found.</div>
       </article>
+      <aside class="reading-rail" aria-label="Reading position">
+        <div class="rail-header"><span class="rail-pip"></span> IN THIS GUIDE</div>
+        <p class="rail-index"><span id="current-index">01</span><span class="rail-slash">/</span><span id="total-index">35</span></p>
+        <div class="rail-meter"><span id="rail-meter-fill"></span></div>
+        <p id="current-section-title" class="rail-current">Overview</p>
+        <div class="rail-links"><a id="rail-previous" href="#overview">Previous section</a><a id="rail-next" href="#trust-model">Next section</a></div>
+        <p class="rail-bottom">READ WITH INTENT.</p>
+      </aside>
+      <button class="back-top" id="back-top" type="button" aria-label="Back to top"><span aria-hidden="true">↑</span></button>
     </main>
   </div>
+  <div class="menu-scrim" id="menu-scrim" hidden></div>
   <script src="app.js"></script>
 </body>
 </html>
