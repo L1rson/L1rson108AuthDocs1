@@ -27,3 +27,7 @@ Create a repository, upload these files, import the repository in Vercel, select
 ## Edit content
 
 Open index.html and search for the section heading you want to change. Each topic is inside a section with an id. Add another section using the same structure and add a matching link in the sidebar navigation.
+
+## Deployment integrity
+
+Deploy all files in this folder together. The website loads fingerprinted copies of the stylesheet and JavaScript so browsers do not reuse old files after a redesign. Do not deploy index.html by itself. If you edit styles.css or app.js, update the matching fingerprinted asset and its filename reference in index.html before publishing.

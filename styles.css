@@ -175,10 +175,10 @@ p { margin: 0 0 19px; color: var(--soft); }
 .callout.warning strong { color: #ecb990; }
 .flow { position: relative; display: grid; gap: 0; margin: 26px 0 34px; padding-left: 24px; }
 .flow::before { position: absolute; content: ""; top: 19px; bottom: 22px; left: 15px; width: 1px; background: #53645e; }
-.flow > div { position: relative; display: grid; grid-template-columns: 46px 1fr; gap: 16px; align-items: baseline; min-height: 69px; padding: 13px 0 14px; border-bottom: 1px solid var(--line-soft); }
+.flow > div { position: relative; display: grid; grid-template-columns: 46px minmax(0,1fr); gap: 16px; align-items: baseline; min-height: 69px; padding: 13px 0 14px; border-bottom: 1px solid var(--line-soft); }
 .flow > div:last-child { border-bottom: 0; }
 .flow span { position: relative; z-index: 1; display: grid; place-items: center; margin-left: -22px; width: 28px; height: 28px; color: #edcfaa; border: 1px solid #667369; background: #11191d; border-radius: 50%; font: 10px var(--mono); }
-.flow p { margin: 0; padding-top: 2px; font-size: 13.5px; line-height: 1.8; }
+.flow p { min-width: 0; overflow-wrap: anywhere; margin: 0; padding-top: 2px; font-size: 13.5px; line-height: 1.8; }
 .detail-list, .mistake-list { display: grid; gap: 0; margin: 28px 0 35px; border-top: 1px solid var(--line); }
 .detail-list > div, .mistake-list > div { display: grid; grid-template-columns: minmax(170px,.37fr) 1fr; gap: 28px; padding: 19px 0 17px; border-bottom: 1px solid var(--line-soft); }
 .detail-list strong, .mistake-list h3 { display: block; margin: 0; color: #eee6d8; font: 650 14px/1.5 var(--sans); }
@@ -335,7 +335,7 @@ code { font: 12px/1.85 var(--mono); overflow-wrap: anywhere; }
   .detail-list > div, .mistake-list > div { grid-template-columns: 1fr; gap: 7px; }
   .callout { padding: 18px 19px; }
   .flow { padding-left: 22px; }
-  .flow > div { grid-template-columns: 26px 1fr; gap: 12px; }
+  .flow > div { grid-template-columns: 26px minmax(0,1fr); gap: 12px; }
   .flow span { margin-left: -22px; }
   table { display: block; overflow-x: auto; }
   th, td { min-width: 120px; padding: 13px 12px; font-size: 11px; }
